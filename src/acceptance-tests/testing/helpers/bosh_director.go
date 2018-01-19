@@ -11,6 +11,7 @@ import (
 	yaml "gopkg.in/yaml.v2"
 
 	boshdir "github.com/cloudfoundry/bosh-cli/director"
+	boshuaa "github.com/cloudfoundry/bosh-cli/uaa"
 	boshtempl "github.com/cloudfoundry/bosh-cli/director/template"
 	bosherr "github.com/cloudfoundry/bosh-utils/errors"
 	boshlog "github.com/cloudfoundry/bosh-utils/logger"
@@ -34,7 +35,9 @@ type BOSHConfig struct {
 	Target         string `yaml:"target"`
 	Username       string `yaml:"username"`
 	Password       string `yaml:"password"`
+	Secret         string `yaml:"secret"`
 	DirectorCACert string `yaml:"director_ca_cert"`
+	UAACACert      string `yaml:"uaa_ca_cert"`
 }
 type BOSHCloudConfig struct {
 	AZs                []string         `yaml:"default_azs"`
@@ -86,16 +89,33 @@ func NewBOSHDirector(boshConfig BOSHConfig, cloudConfig BOSHCloudConfig, release
 	boshDirector.DefaultReleasesVersion = releasesVersions
 
 	directorURL := fmt.Sprintf("https://%s:25555", boshConfig.Target)
+	uaaURL := fmt.Sprintf("https://%s:8443", boshConfig.Target)
+
+        uaaConfig, err := boshuaa.NewConfigFromURL(uaaURL)
+        if err != nil {
+                return BOSHDirector{}, err
+        }
+        uaaConfig.Client = boshConfig.Username
+        uaaConfig.ClientSecret = boshConfig.Secret
+        uaaConfig.CACert = boshConfig.UAACACert
+
 	logger := boshlog.NewLogger(boshlog.LevelError)
+        uaaFactory := boshuaa.NewFactory(logger)
+        uaa, err := uaaFactory.New(uaaConfig)
+        if err != nil {
+                return BOSHDirector{}, err
+        }
+
 	factory := boshdir.NewFactory(logger)
 	config, err := boshdir.NewConfigFromURL(directorURL)
 	if err != nil {
 		return BOSHDirector{}, err
 	}
 
-	config.Client = boshConfig.Username
-	config.ClientSecret = boshConfig.Password
+	//config.Client = boshConfig.Username
+	//config.ClientSecret = boshConfig.Password
 	config.CACert = boshConfig.DirectorCACert
+        config.TokenFunc = boshuaa.NewClientTokenSession(uaa).TokenFunc
 
 	director, err := factory.New(config, boshdir.NewNoopTaskReporter(), boshdir.NewNoopFileReporter())
 	if err != nil {
